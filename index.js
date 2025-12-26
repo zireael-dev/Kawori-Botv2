@@ -72,7 +72,7 @@ async function start() {
         if (type !== 'notify') return
             const msg = messages[0]
             if (!msg?.message) return
-
+            await sock.readMessages([msg.key])
             const from = msg.key.remoteJid
 
                 /* ====================================================== */
