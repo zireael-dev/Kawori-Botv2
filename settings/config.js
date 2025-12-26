@@ -17,5 +17,6 @@ module.exports = {
         // API KEYS
         api: {
             neoxr: "UCIELL"
+            weatherapi: "2fe90ca1e37f4ea381d185828252612"
         }
 }
