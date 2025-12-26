@@ -10,8 +10,8 @@ module.exports = {
 
         // sticker
         sticker: {
-            packname: "KaworiBot",
-            author: "Yusril"
+            packname: "Kawori-Bot",
+            author: "Made by Zireael"
         },
 
         // API KEYS
