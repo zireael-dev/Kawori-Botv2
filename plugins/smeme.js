@@ -10,7 +10,7 @@ const { Sticker, StickerTypes } = require('wa-sticker-formatter')
 const path = require('path')
 
 // ===== REGISTER FONT =====
-const FONT_PATH = path.join(__dirname, '..', 'assets', 'fonts', 'FuturaCondensedExtraBold.otf')
+const FONT_PATH = path.join(__dirname, '..', 'assets', 'FuturaCondensedExtraBold.otf')
 registerFont(FONT_PATH, { family: 'FuturaCondensedExtraBold' })
 
 // ===== UTIL: download image buffer =====
