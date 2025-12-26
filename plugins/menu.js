@@ -7,6 +7,8 @@ const CATEGORY_EMOJI = {
     Downloader: '📥',
     Converter: '🔄',
     Utilities: '⚙️',
+    Animanga: '⛩️',
+    OwnerZone: '🔐',
     Lainnya: '📦'
 }
 
