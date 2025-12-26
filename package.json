@@ -1,0 +1,42 @@
+{
+  "name": "kawori-bot-v2",
+  "version": "2.0.0",
+  "description": "WhatsApp Bot berbasis Baileys dengan sistem plugin modular",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "kawori",
+    "wa bot",
+    "zireael"
+  ],
+  "author": "Zireael",
+  "license": "MIT",
+  "dependencies": {
+    "@shennmine/baileys": "github:kiuur/baileys",
+    "@adiwajshing/keyed-db": "^0.2.4",
+    "@hapi/boom": "^10.0.1",
+    "axios": "^1.3.3",
+    "node-fetch": "^2.6.1",
+    "pino": "^8.17.2",
+
+    "chalk": "^4.1.2",
+
+    "sharp": "^0.32.2",
+    "jimp": "^0.16.3",
+    "node-webpmux": "^3.1.0",
+    "wa-sticker-formatter": "^4.4.4",
+
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "fluent-ffmpeg": "^2.1.3",
+
+    "qrcode-terminal": "^0.12.0",
+    "link-preview-js": "^3.0.0",
+
+    "yt-search": "^2.10.4",
+    "libphonenumber-js": "^1.10.20",
+    "dayjs": "^1.11.10"
+  }
+}
