@@ -1,221 +1,263 @@
 /**
  * plugins/manga.js
- * Manga Interactive Reader (Neoxr API)
+ * Manga Reader (Neoxr API)
+ *
+ * Command:
+ * /manga <judul>     -> search manga
+ * /m <nomor>         -> buka detail + preview chapter
+ * /chapters [page]   -> list chapter (paginated)
+ * /c <nomor>         -> baca chapter (render image)
+ * /cl <nomor>        -> kirim link chapter saja
  */
 
 const axios = require('axios')
 
-const API_KEY   = global.config.api.neoxr
-const PAGE_SIZE = 10
-const MAX_RENDER = 20
-const DELAY = ms => new Promise(r => setTimeout(r, ms))
+const API_KEY   = global.config?.api?.neoxr
+const PAGE_SIZE = 25
+const MAX_PAGES = 20
+const DELAY_MS  = 500
 
-function ensureDb() {
-    global.db = global.db || {}
-    global.db.mangaSessions = global.db.mangaSessions || {}
-}
+const delay = ms => new Promise(r => setTimeout(r, ms))
+
+/* ===== SESSION PER CHAT (TANPA GROUP SESSION) ===== */
+global.db = global.db || {}
+global.db.manga = global.db.manga || {}
 
 function getSession(jid) {
-    ensureDb()
-    if (!global.db.mangaSessions[jid]) {
-        global.db.mangaSessions[jid] = {
+    if (!global.db.manga[jid]) {
+        global.db.manga[jid] = {
             search: [],
             chapters: [],
             title: '',
-            page: 1,
-            selected: null
+            source: ''
         }
     }
-    return global.db.mangaSessions[jid]
+    return global.db.manga[jid]
+}
+
+/* ===== NORMALIZE CHAPTER ASC ===== */
+function normalizeChapters(list = []) {
+    const mapped = list
+        .map(c => ({
+            title: c.title || c.judul || 'Chapter',
+            url: c.url || c.link
+        }))
+        .filter(c => c.url)
+
+    return mapped.reverse() // Neoxr biasanya DESC → jadi ASC
 }
 
 module.exports = {
     name: 'manga',
 
-    async onMessage(sock, msg) {
-        const from = msg.key.remoteJid
+    async onMessage(sock, m) {
+        const from = m.key.remoteJid
         const text =
-            msg.message?.conversation ||
-            msg.message?.extendedTextMessage?.text ||
+            m.message?.conversation ||
+            m.message?.extendedTextMessage?.text ||
             ''
 
+        if (!text) return
+        if (!API_KEY) {
+            await sock.sendMessage(from, { text: '❌ API Manga belum diset.' }, { quoted: m })
+            return
+        }
+
+        const raw = text.trim()
+        const lower = raw.toLowerCase()
         const session = getSession(from)
 
-        /* ================= SEARCH ================= */
-        if (text.startsWith('/manga ')) {
-            const q = text.slice(7).trim()
-            if (!q) return
+        try {
+            /* ================= /manga <judul> ================= */
+            if (lower.startsWith('/manga ')) {
+                const query = raw.slice(7).trim()
+                if (!query) {
+                    await sock.sendMessage(from, { text: '❌ Contoh: /manga one piece' }, { quoted: m })
+                    return
+                }
 
-            const api = `https://api.neoxr.eu/api/comic?q=${encodeURIComponent(q)}&apikey=${API_KEY}`
-            const { data } = await axios.get(api)
+                await sock.sendMessage(from, { react: { text: '⏳', key: m.key } })
 
-            if (!data?.status || !data.data?.length) {
-                return sock.sendMessage(from, { text: '❌ Manga tidak ditemukan' }, { quoted: msg })
+                const url = `https://api.neoxr.eu/api/comic?q=${encodeURIComponent(query)}&apikey=${API_KEY}`
+                const { data } = await axios.get(url)
+
+                let results =
+                    Array.isArray(data?.data) ? data.data :
+                    Array.isArray(data?.data?.result) ? data.data.result :
+                    []
+
+                if (!data?.status || results.length === 0) {
+                    await sock.sendMessage(from, {
+                        text: '⚠️ Manga tidak ditemukan. Coba judul lain.'
+                    }, { quoted: m })
+                    return
+                }
+
+                session.search = results.slice(0, 10).map(v => ({
+                    title: v.title || v.judul || 'Tanpa Judul',
+                    url: v.url || v.link
+                }))
+                session.chapters = []
+                session.title = ''
+                session.source = ''
+
+                const lines = [`🔎 *Hasil pencarian "${query}"*`, '']
+                session.search.forEach((v, i) => {
+                    lines.push(`${i + 1}. ${v.title}`)
+                })
+                lines.push('')
+                lines.push('➡️ Ketik: */m <nomor>* untuk membuka detail')
+
+                await sock.sendMessage(from, { text: lines.join('\n') }, { quoted: m })
+                await sock.sendMessage(from, { react: { text: '✅', key: m.key } })
+                return
             }
 
-            session.search = data.data.slice(0, 10)
-
-            const rows = session.search.map((m, i) => ({
-                title: m.title || 'Tanpa Judul',
-                description: 'Klik untuk lihat chapter',
-                id: `manga_open_${i}`
-            }))
-
-            return sock.sendMessage(from, {
-                interactiveMessage: {
-                    title: '📚 Hasil Pencarian Manga',
-                    footer: 'Pilih salah satu',
-                    nativeFlowMessage: {
-                        buttons: [{
-                            name: 'single_select',
-                            buttonParamsJson: JSON.stringify({
-                                title: '📖 Pilih Manga',
-                                sections: [{
-                                    title: 'Hasil',
-                                    rows
-                                }]
-                            })
-                        }]
-                    }
+            /* ================= /m <nomor> ================= */
+            if (lower.startsWith('/m ')) {
+                const idx = parseInt(raw.slice(3).trim(), 10)
+                if (isNaN(idx) || idx < 1 || idx > session.search.length) {
+                    await sock.sendMessage(from, {
+                        text: '❌ Nomor tidak valid. Gunakan /manga dulu.'
+                    }, { quoted: m })
+                    return
                 }
-            }, { quoted: msg })
-        }
 
-        /* ================= INTERACTIVE CLICK ================= */
-        const params =
-            msg.message?.interactiveResponseMessage
-            ?.nativeFlowResponseMessage
-            ?.paramsJson
+                const pick = session.search[idx - 1]
+                await sock.sendMessage(from, { react: { text: '⏳', key: m.key } })
 
-        if (!params) return
+                const url = `https://api.neoxr.eu/api/comic-get?url=${encodeURIComponent(pick.url)}&apikey=${API_KEY}`
+                const { data } = await axios.get(url)
 
-        const parsed = JSON.parse(params)
-        const id = parsed.id
+                const rawChapters =
+                    data?.data?.chapters ||
+                    data?.data?.chapter ||
+                    data?.data?.list ||
+                    []
 
-        /* ================= OPEN MANGA ================= */
-        if (id.startsWith('manga_open_')) {
-            const idx = Number(id.split('_').pop())
-            const pick = session.search[idx]
-            if (!pick) return
+                const chapters = normalizeChapters(rawChapters)
 
-            const api = `https://api.neoxr.eu/api/comic-get?url=${encodeURIComponent(pick.url)}&apikey=${API_KEY}`
-            const { data } = await axios.get(api)
+                session.chapters = chapters
+                session.title = data?.data?.title || pick.title
+                session.source = pick.url
 
-            session.title = data.data.title || pick.title
-            session.chapters = (data.data.chapters || []).reverse()
-            session.page = 1
+                const preview = chapters.slice(0, 10)
 
-            return sendChapterMenu(sock, from, msg, session)
-        }
+                const lines = [
+                    `📖 *${session.title}*`,
+                    '',
+                    '*Preview Chapter:*'
+                ]
 
-        /* ================= PAGE NAV ================= */
-        if (id === 'manga_next') {
-            session.page++
-            return sendChapterMenu(sock, from, msg, session)
-        }
+                preview.forEach((c, i) => {
+                    lines.push(`${i + 1}. ${c.title}`)
+                })
 
-        if (id === 'manga_prev') {
-            session.page = Math.max(1, session.page - 1)
-            return sendChapterMenu(sock, from, msg, session)
-        }
+                lines.push('')
+                lines.push('➡️ Baca: */c <nomor>*')
+                lines.push('➡️ Link: */cl <nomor>*')
+                lines.push('➡️ Semua chapter: */chapters*')
 
-        /* ================= SELECT CHAPTER ================= */
-        if (id.startsWith('manga_chapter_')) {
-            const idx = Number(id.split('_').pop())
-            session.selected = idx
+                await sock.sendMessage(from, { text: lines.join('\n') }, { quoted: m })
+                await sock.sendMessage(from, { react: { text: '✅', key: m.key } })
+                return
+            }
 
-            return sock.sendMessage(from, {
-                interactiveMessage: {
-                    title: `📖 ${session.title}`,
-                    footer: 'Pilih cara membaca',
-                    nativeFlowMessage: {
-                        buttons: [
-                            {
-                                name: 'quick_reply',
-                                buttonParamsJson: JSON.stringify({
-                                    display_text: '🖼️ Baca di Chat',
-                                    id: 'manga_read_chat'
-                                })
-                            },
-                            {
-                                name: 'quick_reply',
-                                buttonParamsJson: JSON.stringify({
-                                    display_text: '🔗 Kirim Link',
-                                    id: 'manga_read_link'
-                                })
-                            }
-                        ]
-                    }
+            /* ================= /chapters [page] ================= */
+            if (lower.startsWith('/chapters')) {
+                if (!session.chapters.length) {
+                    await sock.sendMessage(from, {
+                        text: '❌ Buka manga dulu dengan /m <nomor>'
+                    }, { quoted: m })
+                    return
                 }
-            }, { quoted: msg })
-        }
 
-        /* ================= READ CHAT ================= */
-        if (id === 'manga_read_chat') {
-            const chap = session.chapters[session.selected]
-            if (!chap) return
+                const page = Math.max(1, parseInt(raw.split(' ')[1] || '1', 10))
+                const start = (page - 1) * PAGE_SIZE
+                const end = Math.min(start + PAGE_SIZE, session.chapters.length)
 
-            const api = `https://api.neoxr.eu/api/comic-render?url=${encodeURIComponent(chap.url)}&apikey=${API_KEY}`
-            const { data } = await axios.get(api)
+                if (start >= session.chapters.length) {
+                    await sock.sendMessage(from, { text: '❌ Halaman tidak valid.' }, { quoted: m })
+                    return
+                }
 
-            const pages = data.data.slice(0, MAX_RENDER)
+                const lines = [
+                    `📚 *${session.title}*`,
+                    `Halaman ${page}`,
+                    ''
+                ]
 
-            await sock.sendMessage(from, {
-                text: `📖 *${session.title}*\n${chap.title}\n🖼️ ${pages.length} halaman`
-            }, { quoted: msg })
+                session.chapters.slice(start, end).forEach((c, i) => {
+                    lines.push(`${start + i + 1}. ${c.title}`)
+                })
 
-            for (let i = 0; i < pages.length; i++) {
+                if (end < session.chapters.length) {
+                    lines.push('')
+                    lines.push(`➡️ Lanjut: */chapters ${page + 1}*`)
+                }
+
+                await sock.sendMessage(from, { text: lines.join('\n') }, { quoted: m })
+                return
+            }
+
+            /* ================= /cl <nomor> ================= */
+            if (lower.startsWith('/cl ')) {
+                const idx = parseInt(raw.slice(4).trim(), 10)
+                if (!session.chapters[idx - 1]) {
+                    await sock.sendMessage(from, { text: '❌ Chapter tidak valid.' }, { quoted: m })
+                    return
+                }
+
+                const chap = session.chapters[idx - 1]
                 await sock.sendMessage(from, {
-                    image: { url: pages[i] },
-                    caption: `Halaman ${i + 1}`
-                }, { quoted: msg })
-                await DELAY(700)
+                    text: `🔗 *${session.title}*\n${chap.title}\n${chap.url}`
+                }, { quoted: m })
+                return
             }
-        }
 
-        /* ================= READ LINK ================= */
-        if (id === 'manga_read_link') {
-            const chap = session.chapters[session.selected]
-            if (!chap) return
+            /* ================= /c <nomor> ================= */
+            if (lower.startsWith('/c ')) {
+                const idx = parseInt(raw.slice(3).trim(), 10)
+                if (!session.chapters[idx - 1]) {
+                    await sock.sendMessage(from, { text: '❌ Chapter tidak valid.' }, { quoted: m })
+                    return
+                }
 
-            return sock.sendMessage(from, {
-                text: `🔗 *${session.title}*\n${chap.title}\n${chap.url}`
-            }, { quoted: msg })
+                const chap = session.chapters[idx - 1]
+                await sock.sendMessage(from, { react: { text: '📖', key: m.key } })
+
+                const url = `https://api.neoxr.eu/api/comic-render?url=${encodeURIComponent(chap.url)}&apikey=${API_KEY}`
+                const { data } = await axios.get(url)
+
+                const pages = Array.isArray(data?.data) ? data.data : []
+                const sendCount = Math.min(pages.length, MAX_PAGES)
+
+                await sock.sendMessage(from, {
+                    text: `📖 *${session.title}*\n${chap.title}\nMengirim ${sendCount} halaman…`
+                }, { quoted: m })
+
+                for (let i = 0; i < sendCount; i++) {
+                    await sock.sendMessage(from, {
+                        image: { url: pages[i] },
+                        caption: `Halaman ${i + 1}/${sendCount}`
+                    }, { quoted: m })
+                    await delay(DELAY_MS)
+                }
+
+                if (pages.length > sendCount) {
+                    await sock.sendMessage(from, {
+                        text: `ℹ️ Halaman terlalu banyak.\nBaca lengkap: ${chap.url}`
+                    }, { quoted: m })
+                }
+
+                return
+            }
+
+        } catch (err) {
+            console.error('[MANGA ERROR]', err)
+            await sock.sendMessage(from, {
+                text: '❌ Terjadi kesalahan saat memproses manga.'
+            }, { quoted: m })
         }
     }
-}
-
-/* ================= HELPER ================= */
-async function sendChapterMenu(sock, from, msg, session) {
-    const start = (session.page - 1) * PAGE_SIZE
-    const slice = session.chapters.slice(start, start + PAGE_SIZE)
-
-    const rows = slice.map((c, i) => ({
-        title: c.title || 'Chapter',
-        description: 'Klik untuk baca',
-        id: `manga_chapter_${start + i}`
-    }))
-
-    const nav = []
-    if (session.page > 1) nav.push({ title: '⬅️ Prev', id: 'manga_prev' })
-    if (start + PAGE_SIZE < session.chapters.length) nav.push({ title: '➡️ Next', id: 'manga_next' })
-
-    return sock.sendMessage(from, {
-        interactiveMessage: {
-            title: `📚 ${session.title}`,
-            footer: `Halaman ${session.page}`,
-            nativeFlowMessage: {
-                buttons: [{
-                    name: 'single_select',
-                    buttonParamsJson: JSON.stringify({
-                        title: '📖 Pilih Chapter',
-                        sections: [{
-                            title: 'Chapter',
-                            rows: [...rows, ...nav]
-                        }]
-                    })
-                }]
-            }
-        }
-    }, { quoted: msg })
 }
