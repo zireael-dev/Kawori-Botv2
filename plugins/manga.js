@@ -3,7 +3,7 @@
  * Mangabats Manga Reader (Integrated with Puppeteer Engine)
  */
 
-const MangaProvider = require('../MangaProvider'); // Sesuaikan path ini!
+const MangaProvider = require('../lib/MangaProvider'); // Sesuaikan path ini!
 const fs = require('fs');
 
 global.db = global.db || {}
