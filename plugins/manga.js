@@ -1,19 +1,13 @@
 /**
  * plugins/manga.js
- * Mangabats Manga Reader (Interactive)
+ * Mangabats Manga Reader (Integrated with Puppeteer Engine)
  */
 
-const axios = require('axios')
-const cheerio = require('cheerio')
-
-const BASE = 'https://www.mangabats.com'
-const MAX_PAGES = 15
-const DELAY = 600
+const MangaProvider = require('../MangaProvider'); // Sesuaikan path ini!
+const fs = require('fs');
 
 global.db = global.db || {}
 global.db.manga = global.db.manga || {}
-
-const delay = ms => new Promise(r => setTimeout(r, ms))
 
 function getSession(jid) {
     if (!global.db.manga[jid]) {
@@ -24,16 +18,6 @@ function getSession(jid) {
         }
     }
     return global.db.manga[jid]
-}
-
-async function fetchHTML(url) {
-    const { data } = await axios.get(url, {
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Referer': BASE
-        }
-    })
-    return cheerio.load(data)
 }
 
 module.exports = {
@@ -48,45 +32,43 @@ module.exports = {
 
         const session = getSession(from)
 
-        /* ================= SEARCH ================= */
+        /* ================= 1. SEARCH MANGA ================= */
         if (text.startsWith('/manga ')) {
             const query = text.slice(7).trim()
             if (!query) return
 
+            // Kirim reaksi loading karena Puppeteer butuh waktu boot
             await sock.sendMessage(from, { react: { text: '⏳', key: msg.key } })
 
-            const searchUrl = `${BASE}/search/story/${query.replace(/\s+/g, '_')}`
-            const $ = await fetchHTML(searchUrl)
+            // --- INTEGRASI: Pakai MangaProvider ---
+            const results = await MangaProvider.search(query)
 
-            const results = []
-            $('.panel-search-story .item').each((_, el) => {
-                const title = $(el).find('.item-title a').text().trim()
-                const url = $(el).find('.item-title a').attr('href')
-                if (title && url) results.push({ title, url })
-            })
-
-            if (!results.length) {
-                return sock.sendMessage(from, { text: '❌ Manga tidak ditemukan' })
+            if (!results || results.length === 0) {
+                return sock.sendMessage(from, { text: '❌ Manga tidak ditemukan atau server sibuk.' })
             }
 
-            session.search = results.slice(0, 10)
+            // Simpan hasil ke session database sementara
+            session.search = results.slice(0, 10) // Ambil 10 teratas aja
 
+            // Tampilkan Menu Interaktif
             return sock.sendMessage(from, {
                 interactiveMessage: {
-                    title: '📚 Manga Found',
-                    footer: 'Pilih judul',
+                    title: '📚 Hasil Pencarian Manga',
+                    body: { text: `Ditemukan ${results.length} hasil untuk "${query}"` },
+                    footer: { text: 'Pilih salah satu untuk melihat chapter' },
                     nativeFlowMessage: {
                         buttons: [
                             {
                                 name: 'single_select',
                                 buttonParamsJson: JSON.stringify({
-                                    title: '📖 Pilih Manga',
+                                    title: '📖 PILIH MANGA',
                                     sections: [
                                         {
-                                            title: 'Hasil',
+                                            title: 'Hasil Pencarian',
+                                            // Mapping hasil dari MangaProvider ke format tombol WA
                                             rows: session.search.map((m, i) => ({
-                                                title: m.title,
-                                                description: 'Klik untuk lihat chapter',
+                                                title: m.title.substring(0, 24), // WA batasi panjang judul
+                                                description: `Latest: ${m.latest}`,
                                                 id: `manga_${i}`
                                             }))
                                         }
@@ -99,7 +81,7 @@ module.exports = {
             }, { quoted: msg })
         }
 
-        /* ================= INTERACTIVE ================= */
+        /* ================= HANDLING INTERACTIVE RESPONSE ================= */
         const params =
             msg.message?.interactiveResponseMessage
             ?.nativeFlowResponseMessage
@@ -110,40 +92,46 @@ module.exports = {
         const parsed = JSON.parse(params)
         const id = parsed.id
 
-        /* ================= OPEN MANGA ================= */
+        /* ================= 2. GET CHAPTER LIST ================= */
         if (id?.startsWith('manga_')) {
             const idx = parseInt(id.split('_')[1])
             const pick = session.search[idx]
 
-            const $ = await fetchHTML(pick.url)
-            const chapters = []
+            if (!pick) return sock.sendMessage(from, { text: 'Sesi kadaluarsa, cari ulang ya.' })
 
-            $('.row-content-chapter li a').each((_, el) => {
-                chapters.push({
-                    title: $(el).text().trim(),
-                    url: $(el).attr('href')
-                })
-            })
+            await sock.sendMessage(from, { react: { text: '📂', key: msg.key } })
+
+            // --- INTEGRASI: Pakai MangaProvider ---
+            // Ambil daftar chapter pakai Puppeteer
+            const chapters = await MangaProvider.getChapters(pick.url)
+
+            if (!chapters.length) {
+                return sock.sendMessage(from, { text: '❌ Gagal mengambil chapter. Coba lagi.' })
+            }
 
             session.title = pick.title
-            session.chapters = chapters.reverse()
+            session.chapters = chapters // Biasanya sudah urut dari terbaru
+
+            // WhatsApp List Message maksimal sekitar 50 row per section
+            const chapterList = session.chapters.slice(0, 50) 
 
             return sock.sendMessage(from, {
                 interactiveMessage: {
                     title: `📖 ${session.title}`,
-                    footer: 'Pilih chapter',
+                    body: { text: `Silakan pilih chapter yang ingin dibaca.\nTotal Chapter: ${chapters.length}` },
+                    footer: { text: 'Format: PDF (High Quality)' },
                     nativeFlowMessage: {
                         buttons: [
                             {
                                 name: 'single_select',
                                 buttonParamsJson: JSON.stringify({
-                                    title: '📄 Pilih Chapter',
+                                    title: '📄 PILIH CHAPTER',
                                     sections: [
                                         {
-                                            title: 'Chapter List',
-                                            rows: session.chapters.slice(0, 50).map((c, i) => ({
-                                                title: c.title,
-                                                description: 'Baca chapter',
+                                            title: 'Daftar Chapter Terbaru',
+                                            rows: chapterList.map((c, i) => ({
+                                                title: c.title.substring(0, 24),
+                                                description: 'Klik untuk download PDF',
                                                 id: `chapter_${i}`
                                             }))
                                         }
@@ -156,37 +144,44 @@ module.exports = {
             }, { quoted: msg })
         }
 
-        /* ================= READ CHAPTER ================= */
+        /* ================= 3. DOWNLOAD & SEND PDF ================= */
         if (id?.startsWith('chapter_')) {
             const idx = parseInt(id.split('_')[1])
             const chap = session.chapters[idx]
 
-            await sock.sendMessage(from, {
-                text: `📖 *${session.title}*\n${chap.title}\nMengirim halaman...`
-            }, { quoted: msg })
+            if (!chap) return
 
-            const $ = await fetchHTML(chap.url)
-            const images = []
+            // Beritahu user proses sedang berjalan
+            await sock.sendMessage(from, { text: `⏳ Sedang memproses *${chap.title}*...\nMohon tunggu sekitar 1-2 menit, sedang menyusun PDF.` }, { quoted: msg })
+            await sock.sendMessage(from, { react: { text: '⬇️', key: msg.key } })
 
-            $('.container-chapter-reader img').each((_, el) => {
-                const src = $(el).attr('src') || $(el).attr('data-src')
-                if (src) images.push(src)
-            })
+            // Nama file unik agar tidak bentrok
+            const safeTitle = session.title.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 20);
+            const safeChapter = chap.title.replace(/[^a-zA-Z0-9]/g, '_');
+            const outputFilename = `./temp_${safeTitle}_${safeChapter}.pdf`;
 
-            const sendCount = Math.min(images.length, MAX_PAGES)
+            try {
+                // --- INTEGRASI: Pakai MangaProvider ---
+                // Download menggunakan teknik Browser Rendering (Anti-403)
+                const pdfPath = await MangaProvider.downloadChapter(chap.url, outputFilename);
 
-            for (let i = 0; i < sendCount; i++) {
-                await sock.sendMessage(from, {
-                    image: { url: images[i] },
-                    caption: `Halaman ${i + 1}/${sendCount}`
-                }, { quoted: msg })
-                await delay(DELAY)
-            }
+                if (pdfPath) {
+                    // Kirim sebagai Dokumen
+                    await sock.sendMessage(from, { 
+                        document: { url: pdfPath }, 
+                        mimetype: 'application/pdf', 
+                        fileName: `${session.title} - ${chap.title}.pdf`,
+                        caption: `✅ Berhasil! Selamat membaca.`
+                    }, { quoted: msg });
 
-            if (images.length > sendCount) {
-                await sock.sendMessage(from, {
-                    text: `ℹ️ Chapter terlalu panjang.\nBaca full di:\n${chap.url}`
-                }, { quoted: msg })
+                    // Hapus file sampah setelah terkirim
+                    fs.unlinkSync(pdfPath);
+                } else {
+                    await sock.sendMessage(from, { text: '❌ Gagal membuat PDF. Mungkin proteksi website sedang tinggi.' }, { quoted: msg });
+                }
+            } catch (err) {
+                console.error(err);
+                await sock.sendMessage(from, { text: '❌ Terjadi kesalahan sistem.' }, { quoted: msg });
             }
         }
     }
