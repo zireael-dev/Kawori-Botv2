@@ -25,7 +25,7 @@ const {
 global.config = require('./settings/config')
 
 const loadPlugins = require('./plugins/_loader')
-const logger = pino({ level: 'silent' })
+const logger = pino({ level: 'trace' })
 
 /* ===== CLI INPUT ===== */
 const question = (text) => {
