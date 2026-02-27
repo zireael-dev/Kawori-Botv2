@@ -1,105 +1,93 @@
-/**
- * plugins/fb.js
- * Facebook Video Downloader (Neoxr API)
- * Command: /fb /facebook /fbdl + link
- * npm install axios
- */
-
 const axios = require('axios')
+const { checkLimit } = require('../lib/limit')
 
-const TRIGGERS = ['/fb', '/facebook', '/fbdl']
+const TRIGGERS = ['/fb', '/fbdl', '/fbvid']
 
 module.exports = {
-    name: 'facebook-downloader',
+    name: 'fb',
 
-    async onMessage(sock, m) {
+    async onMessage(sock, msg) {
+        const from = msg.key.remoteJid
+        const name = msg.pushName || 'User'
+
         const text =
-        m.message?.conversation ||
-        m.message?.extendedTextMessage?.text ||
-        ''
+            msg.message?.conversation ||
+            msg.message?.extendedTextMessage?.text ||
+            ''
 
         if (!text) return
 
-            const args = text.trim().split(/\s+/)
-            const command = args[0].toLowerCase()
-            const link = args[1]
+        const args = text.trim().split(/\s+/)
+        const command = args[0].toLowerCase()
+        const url = args[1]
 
-            if (!TRIGGERS.includes(command)) return
+        if (!TRIGGERS.includes(command)) return
 
-                if (!link || !link.includes('facebook.com')) {
-                    return sock.sendMessage(
-                        m.key.remoteJid,
-                        { text: '❌ Kirim: /fb [link Facebook]\nContoh:\n/fb https://www.facebook.com/share/v/xxxxx' },
-                        { quoted: m }
-                    )
-                }
+        if (!url || (!url.includes('facebook.com') && !url.includes('fb.watch'))) {
+            return sock.sendMessage(from, {
+                text: '❌ Contoh:\n/fb https://fb.watch/xxxx'
+            }, { quoted: msg })
+        }
 
-                // react proses
-                await sock.sendMessage(m.key.remoteJid, {
-                    react: { text: '⏳', key: m.key }
-                })
+        /* ===== CHECK LIMIT ===== */
+        const limitCheck = checkLimit(from, name)
+        if (!limitCheck.ok) {
+            return sock.sendMessage(from, {
+                text: `❌ Limit harian kamu sudah habis
 
-                const apiKey = global.config.api?.neoxr
-                if (!apiKey) {
-                    return sock.sendMessage(
-                        m.key.remoteJid,
-                        { text: '❌ API key Neoxr belum diset di config.js' },
-                        { quoted: m }
-                    )
-                }
+📊 Digunakan: ${limitCheck.user.used}/${limitCheck.user.limit}
+💎 Premium = Unlimited`
+            }, { quoted: msg })
+        }
 
-                let json
-                try {
-                    const apiUrl =
-                    `https://api.neoxr.eu/api/fb?url=${encodeURIComponent(link)}&apikey=${apiKey}`
+        /* ===== PROCESS ===== */
+        await sock.sendMessage(from, {
+            react: { text: '⏳', key: msg.key }
+        })
 
-                    const res = await axios.get(apiUrl)
-                    json = res.data
-                } catch (err) {
-                    console.error('FB API error:', err)
-                    return sock.sendMessage(
-                        m.key.remoteJid,
-                        { text: '❌ Gagal mengambil data dari Facebook.' },
-                        { quoted: m }
-                    )
-                }
+        let data
+        try {
+            const apiUrl =
+                `https://api.neoxr.eu/api/fb?url=${encodeURIComponent(url)}&apikey=${global.config.api.neoxr}`
 
-                if (!json.status || !json.data?.url) {
-                    return sock.sendMessage(
-                        m.key.remoteJid,
-                        { text: '❌ Video Facebook tidak ditemukan atau private.' },
-                        { quoted: m }
-                    )
-                }
+            const res = await axios.get(apiUrl)
+            data = res.data
+        } catch (err) {
+            console.error('[FB API ERROR]', err)
+            return sock.sendMessage(from, {
+                text: '❌ Gagal mengambil data dari Facebook.'
+            }, { quoted: msg })
+        }
 
-                const videoUrl = json.data.url
-                const caption = '🎥 Facebook Video'
+        if (!data?.status || !Array.isArray(data.data)) {
+            return sock.sendMessage(from, {
+                text: '❌ Video tidak ditemukan atau private.'
+            }, { quoted: msg })
+        }
 
-                try {
-                    const videoRes = await axios.get(videoUrl, {
-                        responseType: 'arraybuffer'
-                    })
+        // pilih kualitas terbaik
+        const video =
+            data.data.find(v => v.quality === 'HD') ||
+            data.data.find(v => v.quality === 'SD')
 
-                    await sock.sendMessage(
-                        m.key.remoteJid,
-                        {
-                            video: Buffer.from(videoRes.data),
-                                           mimetype: 'video/mp4',
-                                           caption
-                        },
-                        { quoted: m }
-                    )
-                } catch (err) {
-                    console.error('FB send error:', err)
-                    await sock.sendMessage(
-                        m.key.remoteJid,
-                        {
-                            text:
-                            `❌ Gagal upload ke WhatsApp (mungkin file besar).\n` +
-                            `Download manual:\n${videoUrl}`
-                        },
-                        { quoted: m }
-                    )
-                }
+        if (!video?.url) {
+            return sock.sendMessage(from, {
+                text: '❌ Tidak bisa mengambil video.'
+            }, { quoted: msg })
+        }
+
+        /* ===== SEND ===== */
+        try {
+            await sock.sendMessage(from, {
+                video: { url: video.url },
+                mimetype: 'video/mp4',
+                caption: `🎬 Facebook Video (${video.quality})`
+            }, { quoted: msg })
+        } catch (err) {
+            console.error('[FB SEND ERROR]', err)
+            await sock.sendMessage(from, {
+                text: `⚠️ Gagal upload ke WhatsApp.\nDownload manual:\n${video.url}`
+            }, { quoted: msg })
+        }
     }
 }
