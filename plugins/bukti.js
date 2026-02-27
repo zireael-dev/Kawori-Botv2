@@ -47,34 +47,28 @@ module.exports = {
         const number = jid.split('@')[0]
         const name = msg.pushName || 'Unknown'
 
-        // FORWARD FOTO KE OWNER
-        for (const owner of global.config.owner) {
-            const ownerJid = owner + '@s.whatsapp.net'
+        // FORWARD FOTO KE OWNER (VERSI STABIL)
+for (const owner of global.config.owner) {
+    const ownerJid = owner + '@s.whatsapp.net'
 
-            // forward gambar
-            await sock.sendMessage(
-                ownerJid,
-                { forward: { key: ctx.stanzaId ? msg.key : undefined }, message: quoted },
-            ).catch(() => {})
+    try {
+        // kirim ulang gambar
+        await sock.sendMessage(ownerJid, quoted)
 
-            // kirim info teks
-            await sock.sendMessage(ownerJid, {
-                text: `
+        // kirim info teks
+        await sock.sendMessage(ownerJid, {
+            text: `
 💳 *BUKTI PEMBAYARAN PREMIUM*
 
 👤 Nama   : ${name}
 📱 Nomor  : ${number}
 📦 Paket  : ${paket} hari
 
-Gunakan perintah:
+Gunakan:
 */addprem ${number} ${paket}*
-                `.trim()
-            })
-        }
-
-        // BALAS KE USER
-        await sock.sendMessage(jid, {
-            text: '✅ Bukti pembayaran berhasil dikirim ke admin.\nMohon tunggu konfirmasi.'
-        }, { quoted: msg })
+            `.trim()
+        })
+    } catch (err) {
+        console.log('❌ Gagal kirim ke owner:', err)
     }
 }
