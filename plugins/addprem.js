@@ -55,8 +55,6 @@ Gunakan:
         }
 
         /* ===== SET PREMIUM ===== */
-        const user = getUser(target)
-
         const expired = new Date()
         expired.setDate(expired.getDate() + days)
 
@@ -68,13 +66,39 @@ Gunakan:
             }
         })
 
+        /* ===== NOTIF KE OWNER ===== */
         await sock.sendMessage(from, {
-            text: `✅ Premium berhasil ditambahkan
+            text: `✅ *Premium berhasil diaktifkan*
 
-User: @${target.split('@')[0]}
-Durasi: ${days} hari
-Expired: ${expired.toLocaleString('id-ID')}`,
+👤 User   : @${target.split('@')[0]}
+⏳ Durasi : ${days} hari
+📆 Expired: ${expired.toLocaleString('id-ID')}`,
             mentions: [target]
         }, { quoted: msg })
+
+        /* ===== NOTIF KE USER TARGET ===== */
+        try {
+            await sock.sendMessage(target, {
+                text: `
+🎉 *PREMIUM AKTIF!*
+
+Hai 👋
+Premium kamu di *${global.config.botName}* telah berhasil diaktifkan ✨
+
+📦 Paket   : ${days} hari
+📆 Expired : ${expired.toLocaleDateString('id-ID', {
+                    weekday: 'long',
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric'
+                })}
+
+Nikmati fitur premium tanpa batas 🚀
+Terima kasih sudah mendukung bot ini 💙
+                `.trim()
+            })
+        } catch (err) {
+            console.log('⚠️ Gagal kirim notif ke user:', err)
+        }
     }
 }
