@@ -48,6 +48,7 @@ module.exports = {
         const name = msg.pushName || 'Unknown'
 
         // FORWARD FOTO KE OWNER (VERSI STABIL)
+    console.log('OWNER LIST:', global.config.owner)
 for (const owner of global.config.owner) {
     const ownerJid = owner + '@s.whatsapp.net'
 
