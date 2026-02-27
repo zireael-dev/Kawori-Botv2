@@ -1,64 +1,77 @@
 const payment = require('../lib/payment')
 const { clearTimeout } = require('../lib/timeout')
 
+// simpan foto terakhir per user
+const lastImage = {}
+
 module.exports = {
     name: 'bukti',
 
     async onMessage(sock, msg) {
+        const jid = msg.key.remoteJid
+
+        // ===== SIMPAN FOTO TERAKHIR =====
+        const imageMsg = msg.message?.imageMessage
+        if (imageMsg) {
+            lastImage[jid] = imageMsg
+        }
+
+        // ===== AMBIL TEXT / CAPTION =====
         const text =
             msg.message?.conversation ||
             msg.message?.extendedTextMessage?.text ||
+            msg.message?.imageMessage?.caption ||
             ''
 
         if (!text.startsWith('/bukti')) return
 
-        const jid = msg.key.remoteJid
         const pending = payment.get(jid)
-
         if (!pending) {
             return sock.sendMessage(jid, {
                 text: '❌ Tidak ada transaksi aktif.\nGunakan /buyprem terlebih dahulu.'
             }, { quoted: msg })
         }
 
-        // HARUS reply ke foto
-        const ctx = msg.message?.extendedTextMessage?.contextInfo
-        const quoted = ctx?.quotedMessage
-
-        if (!quoted?.imageMessage) {
-            return sock.sendMessage(jid, {
-                text: '❌ Reply *foto bukti pembayaran* lalu ketik:\n/bukti paket=30'
-            }, { quoted: msg })
-        }
-
-        // Ambil paket
+        // ===== AMBIL PAKET =====
         const paket = text.match(/paket=(\d+)/)?.[1]
         if (!paket) {
             return sock.sendMessage(jid, {
-                text: '❌ Paket tidak ditemukan.\nContoh:\n/bukti paket=30'
+                text: '❌ Format salah.\nGunakan:\n/bukti paket=30'
             }, { quoted: msg })
         }
 
-        // STOP TIMEOUT
+        // ===== AMBIL FOTO =====
+        const image = lastImage[jid]
+        if (!image) {
+            return sock.sendMessage(jid, {
+                text: '❌ Kirim foto bukti pembayaran terlebih dahulu.'
+            }, { quoted: msg })
+        }
+
+        // ===== STOP TIMEOUT =====
         clearTimeout(jid)
         payment.remove(jid)
 
-        // INFO USER
+        // ===== INFO USER =====
         const number = jid.split('@')[0]
         const name = msg.pushName || 'Unknown'
 
-        // FORWARD FOTO KE OWNER (VERSI STABIL)
-    console.log('OWNER LIST:', global.config.owner)
-for (const owner of global.config.owner) {
-    const ownerJid = owner + '@s.whatsapp.net'
+        console.log('OWNER LIST:', global.config.owner)
 
-    try {
-        // kirim ulang gambar
-        await sock.sendMessage(ownerJid, quoted)
+        // ===== KIRIM KE OWNER =====
+        for (const owner of global.config.owner) {
+            const ownerJid = owner + '@s.whatsapp.net'
 
-        // kirim info teks
-        await sock.sendMessage(ownerJid, {
-            text: `
+            try {
+                // kirim gambar
+                await sock.sendMessage(ownerJid, {
+                    image,
+                    caption: '💳 Bukti Pembayaran Premium'
+                })
+
+                // kirim info teks
+                await sock.sendMessage(ownerJid, {
+                    text: `
 💳 *BUKTI PEMBAYARAN PREMIUM*
 
 👤 Nama   : ${name}
@@ -67,9 +80,19 @@ for (const owner of global.config.owner) {
 
 Gunakan:
 */addprem ${number} ${paket}*
-            `.trim()
-        })
-    } catch (err) {
-        console.log('❌ Gagal kirim ke owner:', err)
+                    `.trim()
+                })
+            } catch (err) {
+                console.log('❌ Gagal kirim ke owner:', err)
+            }
+        }
+
+        // ===== BALAS KE USER =====
+        await sock.sendMessage(jid, {
+            text: '✅ Bukti pembayaran berhasil dikirim ke admin.\nMohon tunggu konfirmasi.'
+        }, { quoted: msg })
+
+        // ===== HAPUS CACHE FOTO =====
+        delete lastImage[jid]
     }
 }
