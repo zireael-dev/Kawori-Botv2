@@ -4,7 +4,7 @@ const path = require('path')
 const { downloadContentFromMessage } = require('@shennmine/baileys')
 
 /* ===== LOAD FONT BASE64 ===== */
-const fontPath = path.join(__dirname, '..', 'assets', 'fonts', 'FuturaCondensedExtraBold.otf')
+const fontPath = path.join(__dirname, '..', 'assets', 'FuturaCondensedExtraBold.otf')
 const fontBase64 = fs.readFileSync(fontPath).toString('base64')
 
 /* ===== DOWNLOAD IMAGE ===== */
