@@ -1,132 +1,117 @@
-/**
- * plugins/smeme.js
- * Meme sticker dengan font Futura Condensed Extra Bold
- * Command: /smeme TEKS ATAS|TEKS BAWAH
- */
-
-const { createCanvas, loadImage, registerFont } = require('canvas')
+const sharp = require('sharp')
 const { downloadContentFromMessage } = require('@shennmine/baileys')
-const { Sticker, StickerTypes } = require('wa-sticker-formatter')
-const path = require('path')
 
-// ===== REGISTER FONT =====
-const FONT_PATH = path.join(__dirname, '..', 'assets', 'FuturaCondensedExtraBold.otf')
-registerFont(FONT_PATH, { family: 'FuturaCondensedExtraBold' })
-
-// ===== UTIL: download image buffer =====
-async function downloadImage(message) {
+/* ===== DOWNLOAD IMAGE ===== */
+async function getBuffer(message) {
     const stream = await downloadContentFromMessage(message, 'image')
     let buffer = Buffer.alloc(0)
-    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk])
+    for await (const chunk of stream) {
+        buffer = Buffer.concat([buffer, chunk])
+    }
     return buffer
 }
 
-// ===== UTIL: auto font size =====
-function calcFontSize(text) {
-    if (!text) return 0
-    const len = text.length
-    if (len <= 5) return 120
-    if (len <= 8) return 100
-    if (len <= 11) return 80
-    if (len <= 15) return 64
-    return 48
+/* ===== TEXT SVG GENERATOR ===== */
+function createTextSVG(text, position = 'top') {
+    if (!text) return ''
+
+    return `
+    <svg width="512" height="512">
+        <style>
+            .meme {
+                fill: white;
+                stroke: black;
+                stroke-width: 6;
+                font-size: 48px;
+                font-weight: 900;
+                text-anchor: middle;
+                font-family: Impact, "Arial Black", sans-serif;
+            }
+        </style>
+
+        <text x="50%" y="${position === 'top' ? '10%' : '90%'}"
+              dominant-baseline="middle"
+              class="meme">
+            ${text}
+        </text>
+    </svg>
+    `
 }
 
 module.exports = {
     name: 'smeme',
 
-    async onMessage(sock, m) {
-        const from = m.key.remoteJid
-
-        const text =
-            m.message?.conversation ||
-            m.message?.extendedTextMessage?.text ||
-            ''
-
-        if (!text.toLowerCase().startsWith('/smeme')) return
-
-        // ===== PARSE TEXT =====
-        const payload = text.slice(6).trim()
-        let [top = '', bottom = ''] = payload.split('|').map(t => t.trim().toUpperCase())
-
-        if (top.length > 15) top = top.slice(0, 15)
-        if (bottom.length > 15) bottom = bottom.slice(0, 15)
-
-        if (!top && !bottom) {
-            return sock.sendMessage(from, {
-                text: '❌ Format:\n/smeme TEKS ATAS|TEKS BAWAH\n\nMaks 15 karakter per baris.'
-            }, { quoted: m })
-        }
-
-        // ===== GET IMAGE =====
-        const quoted =
-            m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage
-        const imageMessage = quoted || m.message?.imageMessage
-
-        if (!imageMessage) {
-            return sock.sendMessage(from, {
-                text: '❌ Reply atau kirim gambar dengan caption /smeme'
-            }, { quoted: m })
-        }
-
-        let imageBuffer
+    async onMessage(sock, msg) {
         try {
-            imageBuffer = await downloadImage(imageMessage)
-        } catch {
-            return sock.sendMessage(from, {
-                text: '❌ Gagal mengunduh gambar.'
-            }, { quoted: m })
-        }
+            const from = msg.key.remoteJid
 
-        try {
-            // ===== CANVAS =====
-            const SIZE = 512
-            const canvas = createCanvas(SIZE, SIZE)
-            const ctx = canvas.getContext('2d')
+            const text =
+                msg.message?.conversation ||
+                msg.message?.extendedTextMessage?.text ||
+                msg.message?.imageMessage?.caption ||
+                ''
 
-            const img = await loadImage(imageBuffer)
-            ctx.drawImage(img, 0, 0, SIZE, SIZE)
+            if (!text || !text.startsWith('/smeme')) return
 
-            ctx.textAlign = 'center'
-            ctx.fillStyle = 'white'
-            ctx.strokeStyle = 'black'
-            ctx.lineWidth = 8
+            /* ===== PARSE TEXT ===== */
+            const input = text.slice(7).trim()
+            let [top, bottom] = input.split('|').map(v => v?.trim().toUpperCase())
 
-            // ===== TOP TEXT =====
-            if (top) {
-                const fontSize = calcFontSize(top)
-                ctx.font = `${fontSize}px "FuturaCondensedExtraBold"`
-                ctx.textBaseline = 'top'
-                ctx.strokeText(top, SIZE / 2, 20)
-                ctx.fillText(top, SIZE / 2, 20)
+            if (!top && !bottom) {
+                return sock.sendMessage(from, {
+                    text: '❌ Format:\n/smeme atas | bawah'
+                }, { quoted: msg })
             }
 
-            // ===== BOTTOM TEXT =====
-            if (bottom) {
-                const fontSize = calcFontSize(bottom)
-                ctx.font = `${fontSize}px "FuturaCondensedExtraBold"`
-                ctx.textBaseline = 'bottom'
-                ctx.strokeText(bottom, SIZE / 2, SIZE - 20)
-                ctx.fillText(bottom, SIZE / 2, SIZE - 20)
+            /* ===== AMBIL GAMBAR ===== */
+            let imageMessage =
+                msg.message?.imageMessage ||
+                msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage
+
+            if (!imageMessage) {
+                return sock.sendMessage(from, {
+                    text: '❌ Kirim / reply gambar'
+                }, { quoted: msg })
             }
 
-            // ===== STICKER =====
-            const sticker = new Sticker(canvas.toBuffer(), {
-                pack: global.config?.sticker?.packname || global.config?.botName || 'Kawori-Bot',
-                author: global.config?.sticker?.author || 'Made by Zireael',
-                type: StickerTypes.FULL,
-                quality: 100
+            const buffer = await getBuffer(imageMessage)
+
+            /* ===== RESIZE BASE ===== */
+            let img = sharp(buffer).resize(512, 512, {
+                fit: 'cover'
             })
 
+            /* ===== COMPOSE TEXT ===== */
+            const overlays = []
+
+            if (top) {
+                overlays.push({
+                    input: Buffer.from(createTextSVG(top, 'top')),
+                    top: 0,
+                    left: 0
+                })
+            }
+
+            if (bottom) {
+                overlays.push({
+                    input: Buffer.from(createTextSVG(bottom, 'bottom')),
+                    top: 0,
+                    left: 0
+                })
+            }
+
+            const final = await img
+                .composite(overlays)
+                .webp()
+                .toBuffer()
+
+            /* ===== KIRIM STICKER ===== */
             await sock.sendMessage(from, {
-                sticker: await sticker.toBuffer()
-            }, { quoted: m })
+                sticker: final
+            }, { quoted: msg })
 
         } catch (err) {
             console.error('[SMEME ERROR]', err)
-            await sock.sendMessage(from, {
-                text: '❌ Gagal membuat sticker meme.'
-            }, { quoted: m })
         }
     }
 }
