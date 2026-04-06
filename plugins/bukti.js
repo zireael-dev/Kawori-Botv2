@@ -1,14 +1,14 @@
-const payment = require('../lib/payment')
-const { clearTimeout } = require('../lib/timeout')
 const { downloadContentFromMessage } = require('@whiskeysockets/baileys')
 
-/* ===== HELPER: DOWNLOAD IMAGE ===== */
+/* ===== HELPER DOWNLOAD IMAGE ===== */
 async function getBuffer(message) {
     const stream = await downloadContentFromMessage(message, 'image')
     let buffer = Buffer.alloc(0)
+
     for await (const chunk of stream) {
         buffer = Buffer.concat([buffer, chunk])
     }
+
     return buffer
 }
 
@@ -22,32 +22,41 @@ module.exports = {
             const number = sender.split('@')[0]
             const name = msg.pushName || 'User'
 
+            /* ===== AMBIL TEXT DARI SEMUA SUMBER ===== */
             const text =
                 msg.message?.conversation ||
                 msg.message?.extendedTextMessage?.text ||
+                msg.message?.imageMessage?.caption ||
+                msg.message?.videoMessage?.caption ||
                 ''
 
-            if (!text.startsWith('/bukti')) return
+            console.log('[BUKTI] Incoming:', text)
 
-            /* ===== AMBIL PAKET ===== */
-            const paket = text.match(/paket=(\d+)/)?.[1]
+            if (!text || !text.toLowerCase().startsWith('/bukti')) return
+
+            console.log('[BUKTI] TRIGGERED')
+
+            /* ===== PARSE PAKET ===== */
+            const match = text.match(/paket=(\d+)/i)
+            const paket = match ? match[1] : null
+
             if (!paket) {
                 return sock.sendMessage(from, {
-                    text: '❌ Format salah\n\nContoh:\n/bukti paket=30'
+                    text: '❌ Format salah\nContoh:\n/bukti paket=30'
                 }, { quoted: msg })
             }
 
-            /* ===== AMBIL MEDIA ===== */
+            /* ===== DETEKSI GAMBAR ===== */
             let imageMessage = null
 
-            // jika kirim langsung gambar + caption
+            // case 1: kirim gambar langsung + caption
             if (msg.message?.imageMessage) {
                 imageMessage = msg.message.imageMessage
             }
 
-            // jika reply gambar
-            const ctx = msg.message?.extendedTextMessage?.contextInfo
-            const quoted = ctx?.quotedMessage
+            // case 2: reply gambar
+            const quoted =
+                msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
 
             if (!imageMessage && quoted?.imageMessage) {
                 imageMessage = quoted.imageMessage
@@ -55,15 +64,9 @@ module.exports = {
 
             if (!imageMessage) {
                 return sock.sendMessage(from, {
-                    text: '❌ Kirim atau reply *foto bukti pembayaran* dengan:\n/bukti paket=30'
+                    text: '❌ Kirim gambar bukti + caption:\n/bukti paket=30'
                 }, { quoted: msg })
             }
-
-            /* ===== STOP TIMEOUT (JIKA ADA) ===== */
-            try {
-                clearTimeout(from)
-                payment.remove(from)
-            } catch {}
 
             /* ===== DOWNLOAD IMAGE ===== */
             let buffer
@@ -72,12 +75,16 @@ module.exports = {
             } catch (err) {
                 console.error('[BUKTI] download error:', err)
                 return sock.sendMessage(from, {
-                    text: '❌ Gagal mengambil gambar bukti.'
+                    text: '❌ Gagal mengambil gambar.'
                 }, { quoted: msg })
             }
 
             /* ===== KIRIM KE OWNER ===== */
             const owners = global.config.owner || []
+
+            if (!owners.length) {
+                console.log('[BUKTI] owner kosong di config')
+            }
 
             for (const owner of owners) {
                 const ownerJid = owner + '@s.whatsapp.net'
@@ -92,28 +99,24 @@ module.exports = {
 📱 Nomor  : ${number}
 📦 Paket  : ${paket} hari
 
-🔧 Command:
+Gunakan:
 */addprem ${number} ${paket}*
                         `.trim()
                     })
                 } catch (err) {
-                    console.log('[BUKTI] gagal kirim ke owner:', err)
+                    console.error('[BUKTI] gagal kirim ke owner:', err)
                 }
             }
 
-            /* ===== NOTIF KE USER ===== */
+            /* ===== NOTIF USER ===== */
             await sock.sendMessage(from, {
-                text: `
-✅ *Bukti berhasil dikirim!*
+                text: `✅ Bukti berhasil dikirim!
 
-⏳ Mohon tunggu verifikasi dari owner.
-
-Terima kasih 🤍
-                `.trim()
+⏳ Tunggu konfirmasi dari owner ya.`
             }, { quoted: msg })
 
         } catch (err) {
-            console.error('[BUKTI ERROR]', err)
+            console.error('[BUKTI FATAL ERROR]', err)
         }
     }
 }
