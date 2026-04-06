@@ -1,98 +1,119 @@
 const payment = require('../lib/payment')
 const { clearTimeout } = require('../lib/timeout')
+const { downloadContentFromMessage } = require('@whiskeysockets/baileys')
 
-// simpan foto terakhir per user
-const lastImage = {}
+/* ===== HELPER: DOWNLOAD IMAGE ===== */
+async function getBuffer(message) {
+    const stream = await downloadContentFromMessage(message, 'image')
+    let buffer = Buffer.alloc(0)
+    for await (const chunk of stream) {
+        buffer = Buffer.concat([buffer, chunk])
+    }
+    return buffer
+}
 
 module.exports = {
     name: 'bukti',
 
     async onMessage(sock, msg) {
-        const jid = msg.key.remoteJid
+        try {
+            const from = msg.key.remoteJid
+            const sender = msg.key.participant || msg.key.remoteJid
+            const number = sender.split('@')[0]
+            const name = msg.pushName || 'User'
 
-        // ===== SIMPAN FOTO TERAKHIR =====
-        const imageMsg = msg.message?.imageMessage
-        if (imageMsg) {
-            lastImage[jid] = imageMsg
-        }
+            const text =
+                msg.message?.conversation ||
+                msg.message?.extendedTextMessage?.text ||
+                ''
 
-        // ===== AMBIL TEXT / CAPTION =====
-        const text =
-            msg.message?.conversation ||
-            msg.message?.extendedTextMessage?.text ||
-            msg.message?.imageMessage?.caption ||
-            ''
+            if (!text.startsWith('/bukti')) return
 
-        if (!text.startsWith('/bukti')) return
+            /* ===== AMBIL PAKET ===== */
+            const paket = text.match(/paket=(\d+)/)?.[1]
+            if (!paket) {
+                return sock.sendMessage(from, {
+                    text: '❌ Format salah\n\nContoh:\n/bukti paket=30'
+                }, { quoted: msg })
+            }
 
-        const pending = payment.get(jid)
-        if (!pending) {
-            return sock.sendMessage(jid, {
-                text: '❌ Tidak ada transaksi aktif.\nGunakan /buyprem terlebih dahulu.'
-            }, { quoted: msg })
-        }
+            /* ===== AMBIL MEDIA ===== */
+            let imageMessage = null
 
-        // ===== AMBIL PAKET =====
-        const paket = text.match(/paket=(\d+)/)?.[1]
-        if (!paket) {
-            return sock.sendMessage(jid, {
-                text: '❌ Format salah.\nGunakan:\n/bukti paket=30'
-            }, { quoted: msg })
-        }
+            // jika kirim langsung gambar + caption
+            if (msg.message?.imageMessage) {
+                imageMessage = msg.message.imageMessage
+            }
 
-        // ===== AMBIL FOTO =====
-        const image = lastImage[jid]
-        if (!image) {
-            return sock.sendMessage(jid, {
-                text: '❌ Kirim foto bukti pembayaran terlebih dahulu.'
-            }, { quoted: msg })
-        }
+            // jika reply gambar
+            const ctx = msg.message?.extendedTextMessage?.contextInfo
+            const quoted = ctx?.quotedMessage
 
-        // ===== STOP TIMEOUT =====
-        clearTimeout(jid)
-        payment.remove(jid)
+            if (!imageMessage && quoted?.imageMessage) {
+                imageMessage = quoted.imageMessage
+            }
 
-        // ===== INFO USER =====
-        const number = jid.split('@')[0]
-        const name = msg.pushName || 'Unknown'
+            if (!imageMessage) {
+                return sock.sendMessage(from, {
+                    text: '❌ Kirim atau reply *foto bukti pembayaran* dengan:\n/bukti paket=30'
+                }, { quoted: msg })
+            }
 
-        console.log('OWNER LIST:', global.config.owner)
-
-        // ===== KIRIM KE OWNER =====
-        for (const owner of global.config.owner) {
-            const ownerJid = owner + '@s.whatsapp.net'
-
+            /* ===== STOP TIMEOUT (JIKA ADA) ===== */
             try {
-                // kirim gambar
-                await sock.sendMessage(ownerJid, {
-                    image,
-                    caption: '💳 Bukti Pembayaran Premium'
-                })
+                clearTimeout(from)
+                payment.remove(from)
+            } catch {}
 
-                // kirim info teks
-                await sock.sendMessage(ownerJid, {
-                    text: `
+            /* ===== DOWNLOAD IMAGE ===== */
+            let buffer
+            try {
+                buffer = await getBuffer(imageMessage)
+            } catch (err) {
+                console.error('[BUKTI] download error:', err)
+                return sock.sendMessage(from, {
+                    text: '❌ Gagal mengambil gambar bukti.'
+                }, { quoted: msg })
+            }
+
+            /* ===== KIRIM KE OWNER ===== */
+            const owners = global.config.owner || []
+
+            for (const owner of owners) {
+                const ownerJid = owner + '@s.whatsapp.net'
+
+                try {
+                    await sock.sendMessage(ownerJid, {
+                        image: buffer,
+                        caption: `
 💳 *BUKTI PEMBAYARAN PREMIUM*
 
 👤 Nama   : ${name}
 📱 Nomor  : ${number}
 📦 Paket  : ${paket} hari
 
-Gunakan:
+🔧 Command:
 */addprem ${number} ${paket}*
-                    `.trim()
-                })
-            } catch (err) {
-                console.log('❌ Gagal kirim ke owner:', err)
+                        `.trim()
+                    })
+                } catch (err) {
+                    console.log('[BUKTI] gagal kirim ke owner:', err)
+                }
             }
+
+            /* ===== NOTIF KE USER ===== */
+            await sock.sendMessage(from, {
+                text: `
+✅ *Bukti berhasil dikirim!*
+
+⏳ Mohon tunggu verifikasi dari owner.
+
+Terima kasih 🤍
+                `.trim()
+            }, { quoted: msg })
+
+        } catch (err) {
+            console.error('[BUKTI ERROR]', err)
         }
-
-        // ===== BALAS KE USER =====
-        await sock.sendMessage(jid, {
-            text: '✅ Bukti pembayaran berhasil dikirim ke admin.\nMohon tunggu konfirmasi.'
-        }, { quoted: msg })
-
-        // ===== HAPUS CACHE FOTO =====
-        delete lastImage[jid]
     }
 }
