@@ -183,7 +183,7 @@ Gaya Penulisan & Aturan RP (PENTING):
                             'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
-                            model: "command-r",
+                            model: "command-a-03-2025",
                             messages: session.history, // Mengirim seluruh riwayat percakapan dari awal
                             temperature: 0.8
                         })
