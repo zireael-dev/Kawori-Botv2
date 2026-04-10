@@ -1,10 +1,12 @@
-const { GoogleGenAI } = require('@google/genai')
+// Kita tidak butuh module eksternal, cukup pakai fetch bawaan Node.js
+const cohereApiKey = '9h0Ia5qSQpS9YHYJIunYc7G1ANbJqbFqnlpARpaf'
+const cohereUrl = 'https://api.cohere.com/compatibility/v1/chat/completions/'
 
-const ai = new GoogleGenAI({ apiKey: 'AIzaSyAa82Qqp_jBS2V7FUH6ZSTjLHN-Ui_hBk0' })
+// Memori sesi sekarang akan menyimpan array history pesan
 const userSessions = {}
 
 module.exports = {
-    name: 'ai-interactive-story',
+    name: 'cohere-interactive-story',
     onMessage: async (sock, msg, store) => {
         let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || ""
         
@@ -32,12 +34,13 @@ module.exports = {
 
         // TAHAP 1: MENGIRIM MENU INTERAKTIF
         if (!userSessions[from] && command.match(/^[.!/](story|main)$/i)) {
-            userSessions[from] = { state: 'PILIH_GENRE', genre: '', mcName: '', aiChat: null }
+            // Perhatikan: aiChat diganti jadi array 'history'
+            userSessions[from] = { state: 'PILIH_GENRE', genre: '', mcName: '', history: [] }
 
             return sock.sendMessage(from, {    
                 interactiveMessage: {      
                     title: "✨ KAWORIBOT ROLEPLAY ✨",      
-                    footer: "Pilih dunia tempat ceritamu dimulai!",      
+                    footer: "Powered by Cohere Command R",      
                     nativeFlowMessage: {        
                         buttons: [          
                             {            
@@ -114,30 +117,50 @@ module.exports = {
                 
                 await sock.sendMessage(from, { text: `⏳ _Menyiapkan dunia untuk ${session.mcName}..._` }, { quoted: msg })
 
-                // --- SYSTEM PROMPT BARU: GAYA JANITOR AI ---
                 const systemInstruction = `
 Kamu adalah partner Roleplay/Game Master.
 Dunia: ${session.genre}. Pemain (MC): ${session.mcName}.
 
 Gaya Penulisan & Aturan RP (PENTING):
 1. Menulis layaknya RP di Janitor AI. Fokus pada interaksi karakter (NPC), dialog yang natural, bahasa tubuh, dan emosi yang mendalam.
-2. JANGAN kaku. Gunakan deskripsi yang ekspresif. Jika ada unsur romance/flirting dari MC, balas dengan dinamis (tersipu, menggoda balik, atau menolak sesuai personality NPC).
+2. JANGAN kaku. Gunakan deskripsi yang ekspresif. Jika ada unsur romance/flirting dari MC, balas dengan dinamis.
 3. Buat NPC terasa hidup, punya nama, dan punya motif sendiri.
-4. Jaga batasan SFW (Aman). Boleh ada bumbu romance, ciuman, atau ketegangan emosional, tapi hindari konten eksplisit/NSFW.
+4. Jaga batasan SFW (Aman).
 5. Panjang cerita maksimal 2-3 paragraf pendek agar nyaman dibaca di WhatsApp.
 6. Beri 3 pilihan aksi (A/B/C) di akhir pesan untuk memandu, tapi beri kebebasan pemain untuk membalas dengan ketikan sendiri.`
 
+                // Memasukkan System Prompt dan Pesan Pertama User ke dalam array memory
+                session.history = [
+                    { role: "system", content: systemInstruction },
+                    { role: "user", content: `Halo, aku ${session.mcName}. Tolong buatkan narasi pembuka yang interaktif, perkenalkan satu NPC yang langsung berinteraksi denganku, dan berikan aku 3 pilihan tindakan pertama.` }
+                ]
+
                 try {
-                    // Temperature dinaikkan ke 0.9 agar AI lebih kreatif dan luwes dalam berekspresi
-                    session.aiChat = ai.chats.create({
-                        model: 'gemini-2.0-flash',
-                        config: { systemInstruction: systemInstruction, temperature: 0.9 }
+                    const response = await fetch(cohereUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${cohereApiKey}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            model: "command-r", // Model Cohere yang paling cocok untuk Roleplay
+                            messages: session.history,
+                            temperature: 0.8
+                        })
                     })
 
-                    const response = await session.aiChat.sendMessage({ message: `Halo, aku ${session.mcName}. Tolong buatkan narasi pembuka yang interaktif, perkenalkan satu NPC yang langsung berinteraksi denganku, dan berikan aku 3 pilihan tindakan pertama.` })
-                    return sock.sendMessage(from, { text: response.text }, { quoted: msg })
+                    const data = await response.json()
+                    
+                    if (!data.choices) throw new Error(JSON.stringify(data))
+
+                    const aiReply = data.choices[0].message.content
+                    
+                    // Simpan balasan AI ke dalam memori agar ceritanya nyambung
+                    session.history.push({ role: "assistant", content: aiReply })
+
+                    return sock.sendMessage(from, { text: aiReply }, { quoted: msg })
                 } catch (error) {
-                    console.error('🔥 Error AI Start:', error)
+                    console.error('🔥 Error Cohere Start:', error)
                     delete userSessions[from]
                     return sock.sendMessage(from, { text: 'Gagal memulai server cerita. Coba lagi.' }, { quoted: msg })
                 }
@@ -149,12 +172,37 @@ Gaya Penulisan & Aturan RP (PENTING):
 
                 await sock.sendMessage(from, { text: '⏳ _Mengetik balasan..._' }, { quoted: msg })
                 
+                // Tambahkan pesan balasan user yang baru ke dalam memori
+                session.history.push({ role: "user", content: text.trim() })
+
                 try {
-                    // User bisa merespons seperti: "*Tersenyum menatap matanya* Aku tidak akan pergi."
-                    const response = await session.aiChat.sendMessage({ message: text.trim() })
-                    return sock.sendMessage(from, { text: response.text }, { quoted: msg })
+                    const response = await fetch(cohereUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${cohereApiKey}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            model: "command-r",
+                            messages: session.history, // Mengirim seluruh riwayat percakapan dari awal
+                            temperature: 0.8
+                        })
+                    })
+
+                    const data = await response.json()
+                    
+                    if (!data.choices) throw new Error(JSON.stringify(data))
+
+                    const aiReply = data.choices[0].message.content
+
+                    // Simpan lagi balasan AI yang baru ke dalam memori
+                    session.history.push({ role: "assistant", content: aiReply })
+
+                    return sock.sendMessage(from, { text: aiReply }, { quoted: msg })
                 } catch (error) {
-                    console.error('🔥 Error AI Story:', error)
+                    console.error('🔥 Error Cohere Story:', error)
+                    // Jika error, hapus pesan user terakhir dari memori agar tidak bentrok saat mencoba lagi
+                    session.history.pop() 
                     return sock.sendMessage(from, { text: 'Terjadi anomali dimensi. Coba kirim ulang aksimu.' }, { quoted: msg })
                 }
             }
