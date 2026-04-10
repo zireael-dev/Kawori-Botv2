@@ -143,7 +143,7 @@ Gaya Penulisan & Aturan RP (PENTING):
                             'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
-                            model: "command-r", // Model Cohere yang paling cocok untuk Roleplay
+                            model: "command-a-03-2025", // Model Cohere yang paling cocok untuk Roleplay
                             messages: session.history,
                             temperature: 0.8
                         })
