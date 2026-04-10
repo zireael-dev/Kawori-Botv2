@@ -130,7 +130,7 @@ Gaya Penulisan & Aturan RP (PENTING):
                 try {
                     // Temperature dinaikkan ke 0.9 agar AI lebih kreatif dan luwes dalam berekspresi
                     session.aiChat = ai.chats.create({
-                        model: 'gemini-2.5-flash',
+                        model: 'gemini-1.5-flash',
                         config: { systemInstruction: systemInstruction, temperature: 0.9 }
                     })
 
